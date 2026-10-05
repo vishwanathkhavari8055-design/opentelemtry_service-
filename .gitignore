@@ -1,0 +1,23 @@
+target/
+.apt_generated/
+.classpath
+.factorypath
+.project
+.settings/
+*.class
+dependency-reduced-pom.xml
+dist/
+
+
+# Local-only overrides read automatically by Spring Boot from ./config/.
+# Holds developer-local secrets and overrides; must never be committed.
+# Leading slash anchors this to the repo root so it cannot match the
+# src/main/java/.../config Java package.
+/config/
+
+# graphify knowledge-graph output (generated, any depth).
+graphify-out/
+
+# Local SonarQube scanner config (holds a personal token) and scanner work dir.
+sonar-project.properties
+.scannerwork/

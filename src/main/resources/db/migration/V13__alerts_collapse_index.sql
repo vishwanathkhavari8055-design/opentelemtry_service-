@@ -1,0 +1,54 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+-- V13 — an index the episode collapse can actually use
+--
+-- The problem
+-- -----------
+-- The alerts table collapses episodes: a fingerprint accumulates one row per
+-- firing cycle, and the worklist shows only the newest of each. AlertRepository
+-- .search expresses that as "no row in this alert's group is newer than this
+-- one", correlating on the group key:
+--
+--     NOT EXISTS (SELECT b.id FROM alerts b
+--                 WHERE b.fingerprint = a.fingerprint
+--                   AND LOWER(b.org)  = LOWER(a.org)
+--                   AND b.id > a.id)
+--
+-- `ix_alerts_fingerprint (org, fingerprint)` already exists and looks like the
+-- right index for that, but it cannot serve this predicate: the org comparison
+-- is wrapped in LOWER(), and a b-tree on a bare column is not usable against an
+-- expression. With no usable index the group lookup degrades to a scan, paid
+-- once for the page query and again for its COUNT.
+--
+-- Measured on this deployment before this index, with the correlated MAX(id)
+-- form the NOT EXISTS above replaced:
+--
+--     GET /api/alerts/query?collapse=true    20.5 s
+--     GET /api/alerts/query?collapse=false    0.97 s
+--
+-- i.e. essentially the entire cost of the endpoint was this one clause.
+--
+-- The fix
+-- -------
+-- A functional index whose leading column is the expression the query actually
+-- compares. Column order matches how the predicate narrows: the org expression
+-- is equality, fingerprint is equality, and id is the range/ordering column, so
+-- a matching row is found by descending straight to the group and taking the
+-- first entry.
+--
+-- id DESC because the question asked is always "is there anything NEWER" — the
+-- first index entry in the group answers it, with no further scanning. (A b-tree
+-- can walk either direction, so this is about making the common probe land on
+-- the first tuple rather than about possibility.)
+--
+-- Not UNIQUE, and no WHERE clause: several episodes per (org, fingerprint) is
+-- the normal state this index exists to navigate, and `alerts` has no soft-delete
+-- column to filter on. The existing partial unique index uq_alerts_open_episode
+-- constrains OPEN episodes only and is unaffected.
+--
+-- LOWER(org) is duplicated from the query verbatim, including its immutability
+-- assumption: LOWER() on a text column is IMMUTABLE in PostgreSQL, which is what
+-- makes it indexable here.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE INDEX IF NOT EXISTS ix_alerts_collapse
+    ON alerts (LOWER(org), fingerprint, id DESC);
